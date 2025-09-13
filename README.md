@@ -1,50 +1,100 @@
-🏆 EduCare AI: Your Proactive Student Success Co-pilot
-EduCare AI is a serverless, AI-powered dashboard that transforms raw student data into actionable insights, enabling educators to identify and support at-risk students before they fall behind.
+# 📚 EduCare AI Dashboard v2
 
-In an era of data overload, educators are often forced to be reactive. We built EduCare AI to make them proactive.
+> **An intelligent AI-powered dashboard designed to revolutionize the way educators and institutions manage learning, student engagement, and academic performance.**
 
-🚀 The "Wow" Factor: What Impressed Us
-Serverless, Browser-First Architecture: This entire application is a single HTML file. There is no backend, no server costs, and no complex setup. It's infinitely scalable and 100% private, as all data is processed and stored locally in the user's browser.
+---
 
-AI-Powered Insight Engine: We didn't just connect to an API. We implemented dynamic prompt engineering that feeds contextual student data to the Google Gemini API, turning it from a generic chatbot into a specialized educational analyst that can answer complex, data-specific questions.
+## 🚀 Overview
 
-Hyper-Interactive Canvas Heatmap: Instead of a static image or a clunky library, we built a custom-rendered risk heatmap using the HTML5 Canvas API. It's lightweight, incredibly fast, and provides an immediate, data-dense overview of the entire class's well-being.
+EduCare AI Dashboard v2 is a modern, interactive platform built with **React** and **TailwindCSS**. It empowers teachers and administrators to harness the power of AI for smarter decision-making in education. With intuitive UI components and real-time insights, EduCare provides a seamless experience for managing student data, analyzing risks, and supporting academic success.
 
-🎯 The Problem: Why This Matters
-Educators are drowning in spreadsheets. Critical warning signs—a slight drop in attendance, a dip in test scores, a pending fee—are often scattered and disconnected. By the time these trends are manually identified, it's often too late for effective intervention. This leads to higher dropout rates and unrealized student potential.
+---
 
-💡 Our Solution: From Reactive to Proactive
-EduCare AI solves this by creating a single source of truth that is not just a display, but an analytical partner.
+## ✨ Features
 
-Automated Risk Detection: Our custom algorithm instantly analyzes multiple vectors (attendance, performance trends, fee status, etc.) to generate a real-time risk score.
+* 📊 **AI-Powered Risk Analysis** – Predicts at-risk students and provides actionable insights.
+* 🧑‍🏫 **Teacher-Centric Tools** – Focused on helping educators track progress and make informed decisions.
+* ⚡ **Interactive UI** – Built with React, TailwindCSS, and shadcn/ui for a sleek and responsive design.
+* 🔍 **Search & Filter** – Quickly find and manage students, assignments, and reports.
+* 🛠 **Modular Components** – Easy to customize, extend, and integrate.
+* 📈 **Data Visualization** – Leverages charts and badges for clear and engaging presentation.
+* 🔐 **Secure & Scalable** – Designed with performance and reliability in mind.
+---
 
-Visual Clarity: We don't just show tables. We use Chart.js and our custom Canvas heatmap to make complex data instantly understandable.
+## 🛠️ Tech Stack
 
-Actionable AI Guidance: The integrated Gemini AI Mentor doesn't just answer questions; it provides concrete, evidence-based intervention strategies, acting as a co-pilot for the educator.
+* **Frontend:** React, TailwindCSS, shadcn/ui, Framer Motion, Recharts
+* **Backend (Pluggable):** Compatible with Node.js/Express or Django REST APIs
+* **State Management:** React Hooks & Context
+* **Build Tools:** Vite / Next.js (configurable)
+* **Package Manager:** npm / yarn / pnpm
 
-🛠️ Technical Showcase & Features
-Instant Data Onboarding: Seamlessly upload .xlsx or .csv files using XLSX.js (SheetJS).
+---
 
-Dynamic Visualizations: All charts are dynamically generated with Chart.js and update in real-time based on filters and data changes.
 
-Zero-Dependency Execution: Runs out-of-the-box in any modern browser with no installation or build steps required.
 
-Modern UI/UX: A clean, fully responsive interface built with Tailwind CSS.
+## 📂 Project Structure
 
-100% Client-Side Logic: All calculations, data processing, and state management are handled efficiently with Vanilla JavaScript.
+```
+EduCareAI-Dashboard/
+│── src/
+│   ├── components/   # Reusable UI components
+│   ├── pages/        # Dashboard pages
+│   ├── hooks/        # Custom React hooks
+│   ├── utils/        # Helper functions
+│   ├── assets/       # Icons, images, and styles
+│── public/           # Static files
+│── package.json
+│── README.md
+```
 
-⚙️ How to Run & Test
-It's as simple as it gets:
+---
 
-Download: Get the educare_ai_dashboard.html file.
+## 🤝 Contributing
 
-Open: Double-click the file to open it in your browser.
+We welcome contributions! 🎉
 
-Experience: Use the included student_data.csv to instantly see the dashboard in action.
+1. Fork this repo
+2. Create your feature branch (`git checkout -b feature/new-feature`)
+3. Commit your changes (`git commit -m 'Add new feature'`)
+4. Push to branch (`git push origin feature/new-feature`)
+5. Open a **Pull Request** 🚀
 
-🔮 Future Vision
-This hackathon project is the foundation for a real-time, collaborative platform. Future steps include:
+---
 
-Predictive Analytics: Training a model to forecast future student risk.
+## 🌟 Roadmap
 
-Real-time Collaboration: Allowing multiple educators to share notes and intervention plans .
+* [ ] AI chatbot for teacher support
+* [ ] Automated grading suggestions
+* [ ] Parent dashboard for student progress
+* [ ] Dark mode toggle
+
+---
+
+## 📜 License
+
+This project is licensed under the **MIT License** – free to use and modify.
+
+---
+
+## 🙌 Acknowledgements
+
+* [shadcn/ui](https://ui.shadcn.com)
+* [Recharts](https://recharts.org)
+* [TailwindCSS](https://tailwindcss.com)
+* [Framer Motion](https://www.framer.com/motion/)
+
+
+---
+
+## 💡 Why EduCare AI?
+
+
+Nowadays there are countless AI tools for students, but very few for **teachers**. EduCare AI Dashboard bridges this gap by providing educators with advanced analytics, risk detection, and seamless data management — all in one place. By supporting teachers, we indirectly empower students to achieve their best potential.
+
+<img width="837" height="644" alt="Screenshot 2025-09-13 at 3 17 57 PM" src="https://github.com/user-attachments/assets/55bbbc31-cc7d-4e49-bc5b-cc8f541c5109" />
+<img width="819" height="554" alt="Screenshot 2025-09-13 at 3 18 12 PM" src="https://github.com/user-attachments/assets/edebd99a-2b00-4585-8dd5-1a7d4c558d6b" />
+<img width="691" height="596" alt="Screenshot 2025-09-13 at 3 18 21 PM" src="https://github.com/user-attachments/assets/87fb88d2-42a5-4bcc-b49e-56c4cba92484" />
+
+<img width="819" height="568" alt="Screenshot 2025-09-13 at 3 18 32 PM" src="https://github.com/user-attachments/assets/b2afa15e-4452-4b85-a4ea-fe9c42853ab0" />
+
