@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EduCare AI - Student Success Dashboard</title>
+    <!-- Chosen Palette: Corporate Calm with Risk Indicators -->
+    <!-- Application Structure Plan: A single-page dashboard with a clear top bar for global actions (upload, export), a key stats overview, and three main switchable views managed by tabs. 1) Students View: The primary, default view for mentors, showing all students in an easy-to-scan card grid alongside an interactive heatmap for a quick visual overview of the entire class's risk distribution. This is the most direct way for a user to find and assess individual students. 2) Analytics View: A higher-level view for understanding class-wide trends and statistics. Grouping charts here separates deep analysis from the day-to-day task of checking on students, reducing clutter. 3) AI Mentor View: A dedicated space for the advanced AI chat tool. This task-oriented, tab-based structure was chosen because it allows the user to switch contexts (individual students vs. class trends vs. AI query) without leaving the page, which is the core strength of an SPA. -->
+    <!-- Visualization & Content Choices: 1) Key Stats (Total Students, Avg Attendance): Report Info -> KPIs -> Goal: Inform -> Viz/Method: Dynamic HTML stat cards -> Interaction: None. 2) Student List: Report Info -> Student Records -> Goal: Organize/Inform -> Viz/Method: HTML card grid -> Interaction: Click card to open detail modal. 3) Student Performance Trend: Report Info -> Seasonal Scores -> Goal: Change -> Viz/Method: Line Chart (Chart.js/Canvas) -> Interaction: Tooltip on hover. 4) Class Risk Heatmap: Report Info -> All Student Risk Levels -> Goal: Organize/Relationships -> Viz/Method: Interactive Canvas Drawing -> Interaction: Tooltip on hover. This replaces the original SVG to meet constraints and provides a dense, immediate visual summary. 5) Risk Distribution: Report Info -> Risk Levels -> Goal: Compare -> Viz/Method: Pie Chart (Chart.js/Canvas) -> Interaction: Tooltip on hover. 6) Attendance vs. Risk: Report Info -> Attendance/Risk Scores -> Goal: Compare/Relationships -> Viz/Method: Bar Chart (Chart.js/Canvas) -> Interaction: Tooltip on hover. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        .chart-container { position: relative; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto; height: 300px; max-height: 400px; }
+        @media (min-width: 768px) { .chart-container { height: 350px; } }
+        .tab-trigger[data-state="active"] { background-color: white; color: black; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .tab-trigger { color: #475569; }
+        .modal-backdrop { background-color: rgba(0, 0, 0, 0.5); }
+        .tooltip { position: absolute; background: rgba(0,0,0,0.8); color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 10; }
+    </style>
+</head>
+<body class="bg-slate-100 font-sans">
+
+    <div id="app-root">
+        <!-- App content will be rendered here by JavaScript -->
+    </div>
+
+    <script>
+        // --- STATE MANAGEMENT ---
+        let state = {
+            user: null,
+            students: [],
+            apiKey: '',
+            filter: '',
+            loginEmail: '',
+            question: '',
+            answer: '',
+            isAnswering: false,
+            isUploading: false,
+            activeTab: 'students',
+        };
+
+        // --- CONSTANTS & LOCAL STORAGE HELPERS ---
+        const CONSTANTS = {
+            LS_KEY_STUDENTS: "educare_ai_students_html_v1",
+            LS_KEY_USER: "educare_ai_user_html_v1",
+            LS_KEY_API_KEY: "educare_ai_api_key_html_v1",
+        };
+        const loadFromLS = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || fallback); } catch { return JSON.parse(fallback); } };
+        const saveToLS = (key, data) => localStorage.setItem(key, JSON.stringify(data));
+        
+        // --- UTILITY FUNCTIONS ---
+        const percent = (v) => `${Math.round(v)}%`;
+        const clamp01 = (x) => Math.max(0, Math.min(1, x));
+        const trend = (arr) => {
+            if (!arr || arr.length < 2) return 0;
+            const start = arr[0] || 0;
+            const d = arr[arr.length - 1] - start;
+            return d / (start === 0 ? 1 : start);
+        };
+
+        function colorForRisk(level) {
+            switch (level) {
+                case "LOW": return "bg-green-500 text-white";
+                case "MEDIUM": return "bg-yellow-500 text-white";
+                case "HIGH": return "bg-orange-500 text-white";
+                case "RED": return "bg-red-600 text-white";
+                default: return "bg-gray-300 text-black";
+            }
+        }
+
+        // --- CORE LOGIC ---
+        function computeRiskScore(s) {
+            let score = 0;
+            if (s.attendance < 75) score += 20;
+            if (s.attendance < 50) score += 35;
+            if (trend(s.seasonal) < -0.15) score += 25;
+            if (s.attempts > 2) score += 30;
+            if (!s.feesPaid) score += 10;
+            const attFactor = 1 - clamp01(s.attendance / 100);
+            const avgScore = s.seasonal.length ? s.seasonal.reduce((a, b) => a + b, 0) / s.seasonal.length : 0;
+            const acadFactor = 1 - clamp01(avgScore / 100);
+            const feeFactor = s.feesPaid ? 0 : 0.5;
+            const mlIsh = clamp01(0.5 * attFactor + 0.4 * acadFactor + 0.1 * feeFactor);
+            score += Math.round(mlIsh * 30);
+            score = Math.max(0, Math.min(100, score));
+            let level = "LOW";
+            if (score >= 75) level = "RED";
+            else if (score >= 55) level = "HIGH";
+            else if (score >= 35) level = "MEDIUM";
+            return { score, level };
+        }
+
+        function suggestIntervention(s) {
+            const tips = [];
+            if (s.attendance < 75) tips.push("Schedule attendance counseling and mark required makeup sessions.");
+            if (s.attendance < 60) tips.push("Set weekly check-ins with mentor; require class participation tracker.");
+            const avg = s.seasonal.length ? Math.round(s.seasonal.reduce((a, b) => a + b, 0) / s.seasonal.length) : 0;
+            if (avg < 60) tips.push("Enroll in remedial tutoring; share topic-wise practice sets.");
+            if (trend(s.seasonal) < -0.10) tips.push("Investigate reasons for declining scores; adjust study plan.");
+            if (!s.feesPaid) tips.push("Notify parent/guardian about dues; offer installment plan if eligible.");
+            if (s.attempts > 2) tips.push("Academic probation alert; create mandatory recovery roadmap with counselor.");
+            if (tips.length === 0) tips.push("Maintain momentum. Offer enrichment resources & peer mentoring opportunities.");
+            return tips;
+        }
+        
+        function normalizeRows(rows) {
+            return rows.map((r, idx) => {
+                const name = r.Name || r["Student Name"] || r["name"] || `Student ${idx + 1}`;
+                const roll = String(r.Roll || r["Roll No"] || r["RollNo"] || r["ID"] || idx + 1);
+                let attendanceRaw = r.Attendance || r["Attendance %"] || r["attendance"] || 0;
+                let attendance = typeof attendanceRaw === "string" ? Number(attendanceRaw.toString().replace(/[^0-9.]/g, "")) : Number(attendanceRaw || 0);
+                const s1 = Number(r.Seasonal1 || r["Seasonal Exam 1"] || 0);
+                const s2 = Number(r.Seasonal2 || r["Seasonal Exam 2"] || 0);
+                const s3 = Number(r.Seasonal3 || r["Seasonal Exam 3"] || 0);
+                const attempts = Number(r.Attempts || r["No. of Attempts"] || 0);
+                const feeStatusRaw = (r.FeeStatus || r["Fee Status"] || "Paid").toString().toLowerCase();
+                const feesPaid = !(feeStatusRaw.includes("unpaid") || feeStatusRaw.includes("due") || feeStatusRaw.includes("pending"));
+                const email = r.Email || r["Email ID"] || undefined;
+                const base = { roll, name, attendance: Number.isFinite(attendance) ? attendance : 0, feesPaid, seasonal: [s1, s2, s3], attempts: Number.isFinite(attempts) ? attempts : 0, email };
+                const { score, level } = computeRiskScore(base);
+                return { ...base, riskScore: score, riskLevel: level };
+            });
+        }
+        
+        function gridPositions(list, width, height) {
+            if (!list.length) return [];
+            const cols = Math.ceil(Math.sqrt(list.length));
+            const cellW = width / cols;
+            const cellH = height / Math.ceil(list.length / cols);
+            return list.map((s, i) => {
+                const r = s.riskLevel === "RED" ? 10 : s.riskLevel === "HIGH" ? 8 : s.riskLevel === "MEDIUM" ? 7 : 6;
+                return {
+                    x: (i % cols) * cellW + cellW / 2,
+                    y: Math.floor(i / cols) * cellH + cellH / 2,
+                    r,
+                    color: s.riskLevel === "RED" ? "#ef4444" : s.riskLevel === "HIGH" ? "#f97316" : s.riskLevel === "MEDIUM" ? "#eab308" : "#22c55e",
+                    s,
+                };
+            });
+        }
+        
+        // --- GEMINI API INTEGRATION ---
+        async function geminiMentorChatReply(question, students, apiKey) {
+            if (!apiKey) {
+                const q = question.toLowerCase();
+                if (q.includes("top 5") && (q.includes("high-risk") || q.includes("risk"))) {
+                  const sorted = [...students].sort((a,b)=>b.riskScore - a.riskScore).slice(0,5);
+                  return `Here are the top 5 high-risk students:\n` + sorted.map((s,i)=>`${i+1}. ${s.name} (Roll ${s.roll}) – Risk Score: ${Math.round(s.riskScore)}`).join("\n");
+                }
+                return "DEMO MODE: Paste your Google AI API key to unlock advanced analysis. Try 'top 5 high-risk students'.";
+            }
+            
+            const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const highRiskStudents = students.filter(s => s.riskLevel === 'HIGH' || s.riskLevel === 'RED').sort((a, b) => b.riskScore - a.riskScore).slice(0, 15);
+            const systemPrompt = `You are EduCare AI, a helpful assistant for educational mentors. Analyze the provided student data JSON to answer the user's question concisely. When listing students, always include their name and roll number. Student Data Context: ${JSON.stringify(highRiskStudents, null, 2)}`;
+            const payload = { contents: [{ parts: [{ text: `${systemPrompt}\n\nUser Question: "${question}"` }] }] };
+            
+            try {
+                const response = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!response.ok) {
+                    const error = await response.json();
+                    console.error("Gemini API Error:", error);
+                    return `Error: API call failed with status ${response.status}. Check if your API key is correct.`;
+                }
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                return text || "The AI returned an empty response. Please try rephrasing.";
+            } catch (error) {
+                console.error("Network or fetch error:", error);
+                return "An error occurred while contacting the AI service. Check your internet connection.";
+            }
+        }
+        
+        // --- TEMPLATING / RENDERING ---
+        
+        function createLoginHTML() {
+            return `
+            <div class="min-h-screen bg-gradient-to-br from-slate-50 to-sky-50 flex items-center justify-center p-6">
+              <div class="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+                <div class="hidden md:flex flex-col gap-4 p-8 rounded-3xl bg-white shadow-2xl border">
+                  <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 rounded-2xl bg-gradient-to-r from-indigo-600 to-sky-500 text-white grid place-content-center text-3xl font-bold">🎓</div>
+                    <div>
+                      <h1 class="text-2xl font-bold">EduCare AI</h1>
+                      <p class="text-sm text-slate-500">Student Success Dashboard</p>
+                    </div>
+                  </div>
+                  <div class="mt-2"><h2 class="text-lg font-semibold">Why EduCare AI?</h2><ul class="mt-2 text-sm space-y-2 text-slate-600"><li>• Track attendance & performance at a glance.</li><li>• Identify high-risk students and take timely action.</li><li>• Built-in mentor assistant for quick insights.</li></ul></div>
+                  <div class="mt-auto text-xs text-slate-400">Data is stored locally. No server required.</div>
+                </div>
+                <div class="p-6 rounded-3xl bg-white shadow-2xl border">
+                  <div class="flex items-center justify-between mb-4"><div><h2 class="text-2xl font-extrabold">Welcome, Mentor</h2><p class="text-sm text-slate-500">Sign in to the dashboard</p></div><div class="text-xs text-slate-400">Demo Mode</div></div>
+                  <div class="space-y-4">
+                    <label class="text-sm text-slate-600">Email address</label>
+                    <div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">✉️</span><input type="email" id="loginEmail" placeholder="you@college.edu" value="${state.loginEmail}" class="pl-9 rounded-xl w-full p-2 border"/></div>
+                    <div class="flex gap-2"><button id="loginBtn" class="flex-1 rounded-xl bg-slate-800 text-white p-2 flex items-center justify-center gap-2"><span>➡️</span> Continue</button><button id="demoLoginBtn" class="rounded-xl p-2 border">Demo</button></div>
+                    <div class="mt-3 text-center text-sm text-slate-500"><span>Upload class sheet later from the dashboard.</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        }
+        
+        function createAppShellHTML() {
+            const avgAttendance = Math.round(state.students.reduce((a, s) => a + s.attendance, 0) / (state.students.length || 1));
+            const riskCounts = state.students.reduce((c, s) => { c[s.riskLevel] = (c[s.riskLevel] || 0) + 1; return c; }, { LOW: 0, MEDIUM: 0, HIGH: 0, RED: 0 });
+            const highRiskCount = riskCounts.HIGH + riskCounts.RED;
+
+            return `
+            <div id="modal-container"></div>
+            <div class="min-h-screen bg-slate-100">
+              <div class="max-w-7xl mx-auto p-4 md:p-6">
+                <div class="flex flex-wrap items-center justify-between gap-4">
+                  <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-slate-900 text-white grid place-content-center text-2xl font-bold">🎓</div>
+                    <div><div class="text-xl font-bold">EduCare AI</div><div class="text-sm text-slate-500">Welcome, ${state.user.email}</div></div>
+                  </div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <input id="filterInput" placeholder="Search name, roll, risk..." value="${state.filter}" class="rounded-lg w-48 p-2 border"/>
+                    <button id="uploadBtn" class="rounded-lg p-2 border bg-white flex items-center gap-2" ${state.isUploading ? 'disabled' : ''}>${state.isUploading ? '...': '📤'} Upload</button>
+                    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" class="hidden" />
+                    <button id="exportBtn" class="rounded-lg p-2 border bg-white flex items-center gap-2">📄 Export</button>
+                    <button id="logoutBtn" class="rounded-lg p-2 bg-red-500 text-white flex items-center gap-2">❌ Logout</button>
+                  </div>
+                </div>
+                
+                <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div class="flex items-center gap-3 p-4 rounded-xl bg-white shadow-sm border"><div class="p-3 rounded-full bg-slate-100 text-slate-600 text-2xl">👥</div><div><div class="text-slate-500 text-sm">Total Students</div><div class="text-xl font-semibold">${state.students.length}</div></div></div>
+                  <div class="flex items-center gap-3 p-4 rounded-xl bg-white shadow-sm border"><div class="p-3 rounded-full bg-slate-100 text-slate-600 text-2xl">📈</div><div><div class="text-slate-500 text-sm">Avg Attendance</div><div class="text-xl font-semibold">${avgAttendance}%</div></div></div>
+                  <div class="flex items-center gap-3 p-4 rounded-xl bg-white shadow-sm border"><div class="p-3 rounded-full bg-slate-100 text-slate-600 text-2xl">⚠️</div><div><div class="text-slate-500 text-sm">High-Risk</div><div class="text-xl font-semibold">${highRiskCount}</div></div></div>
+                  <div class="flex items-center gap-3 p-4 rounded-xl bg-white shadow-sm border"><div class="p-3 rounded-full bg-slate-100 text-slate-600 text-2xl">🧠</div><div><div class="text-slate-500 text-sm">AI Mentor</div><div class="text-xl font-semibold">${state.apiKey ? "Gemini Active" : "Demo Mode"}</div></div></div>
+                </div>
+                
+                <div class="mt-6">
+                  <div class="rounded-xl bg-slate-200 p-1 flex space-x-1">
+                    <button data-tab="students" class="tab-trigger flex-1 p-2 rounded-lg text-sm font-medium">Students</button>
+                    <button data-tab="analytics" class="tab-trigger flex-1 p-2 rounded-lg text-sm font-medium">Analytics</button>
+                    <button data-tab="mentor" class="tab-trigger flex-1 p-2 rounded-lg text-sm font-medium">AI Mentor Chat</button>
+                  </div>
+                  <div id="tabs-content" class="mt-4"></div>
+                </div>
+                
+                <footer class="mt-10 text-center text-xs text-slate-500">© ${new Date().getFullYear()} EduCare AI · Demo build for modern educational institutions.</footer>
+              </div>
+            </div>`;
+        }
+        
+        function createTabsContentHTML() {
+            if (state.activeTab === 'students') return createStudentsTabHTML();
+            if (state.activeTab === 'analytics') return createAnalyticsTabHTML();
+            if (state.activeTab === 'mentor') return createMentorTabHTML();
+            return '';
+        }
+        
+        function createStudentsTabHTML() {
+            const q = state.filter.toLowerCase().trim();
+            const filtered = q ? state.students.filter(s => s.name.toLowerCase().includes(q) || String(s.roll).includes(q) || s.riskLevel.toLowerCase().includes(q)) : state.students;
+            
+            const studentCards = filtered.length > 0 ? filtered.map(s => `
+                <div class="rounded-2xl shadow-sm border-slate-200 bg-white hover:shadow-md transition-shadow">
+                    <div class="p-4">
+                      <div class="flex items-start justify-between"><div><div class="text-lg font-semibold">${s.name}</div><div class="text-sm text-slate-500">Roll: ${s.roll}</div></div><span class="px-2 py-1 text-xs font-medium rounded-full ${colorForRisk(s.riskLevel)}">${s.riskLevel}</span></div>
+                      <div class="mt-3 grid grid-cols-3 gap-2 text-center text-sm">
+                        <div class="p-2 rounded-lg bg-slate-50"><div class="text-xs text-slate-500">Attendance</div><div class="font-medium">${percent(s.attendance)}</div></div>
+                        <div class="p-2 rounded-lg bg-slate-50"><div class="text-xs text-slate-500">Risk</div><div class="font-medium">${percent(s.riskScore)}</div></div>
+                        <div class="p-2 rounded-lg bg-slate-50"><div class="text-xs text-slate-500">Fees</div><div class="font-medium ${s.feesPaid ? 'text-green-600' : 'text-red-600'}">${s.feesPaid ? "Paid" : "Due"}</div></div>
+                      </div>
+                      <button class="w-full mt-3 rounded-lg p-2 bg-slate-800 text-white text-sm" data-roll="${s.roll}" onclick="handleShowModal('${s.roll}')">View Details</button>
+                    </div>
+                </div>
+            `).join('') : '<p>No students match your search.</p>';
+            
+            return `
+            <div class="grid lg:grid-cols-3 gap-4">
+                <div class="lg:col-span-2 grid sm:grid-cols-2 xl:grid-cols-3 gap-4">${studentCards}</div>
+                <div class="lg:col-span-1 p-4 rounded-xl bg-white shadow-sm border">
+                    <div class="font-semibold mb-2">Class Risk Heatmap</div>
+                    <p class="text-sm text-slate-600 mb-2">A quick overview of your class's risk distribution. Each circle is a student, sized and colored by their risk level. Hover over a circle to see the student's name.</p>
+                    <div class="relative w-full h-64 rounded-lg bg-slate-50 border overflow-hidden">
+                        <canvas id="heatmapCanvas" class="absolute inset-0 w-full h-full"></canvas>
+                        <div id="heatmapTooltip" class="tooltip"></div>
+                    </div>
+                    <div class="mt-3 text-xs text-slate-500">This interactive canvas provides a dense, immediate visual summary of your entire class's health.</div>
+                </div>
+            </div>`;
+        }
+        
+        function createAnalyticsTabHTML() {
+             return `
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="p-4 rounded-xl bg-white shadow-sm border">
+                <div class="font-semibold">Risk Distribution</div>
+                <p class="text-sm text-slate-600 mb-2">This chart shows the proportion of students in each risk category, helping you understand the overall health of the class at a glance.</p>
+                <div class="chart-container"><canvas id="pieChartCanvas"></canvas></div>
+              </div>
+              <div class="p-4 rounded-xl bg-white shadow-sm border">
+                <div class="font-semibold">Attendance vs. Risk Score</div>
+                <p class="text-sm text-slate-600 mb-2">This chart compares attendance percentages against calculated risk scores for each student, making it easy to spot correlations between poor attendance and high risk.</p>
+                <div class="chart-container"><canvas id="barChartCanvas"></canvas></div>
+              </div>
+            </div>`;
+        }
+        
+        function createMentorTabHTML() {
+            return `
+            <div class="grid lg:grid-cols-3 gap-4">
+              <div class="lg:col-span-2 p-4 rounded-xl bg-white shadow-sm border">
+                <h3 class="font-semibold">AI Mentor Chat Assistant</h3>
+                <p class="text-sm text-slate-600 mb-3">Ask for insights, trends, or intervention strategies based on your current student data. For example, try asking "list students with declining scores" or "suggest interventions for the top 3 high-risk students".</p>
+                <div class="flex gap-2">
+                  <input id="mentorQuestion" placeholder="e.g., 'Suggest interventions for...'" value="${state.question}" class="rounded-lg p-2 border flex-1"/>
+                  <button id="askMentorBtn" class="rounded-lg p-2 bg-slate-800 text-white flex items-center justify-center w-24" ${state.isAnswering ? 'disabled' : ''}>${state.isAnswering ? '...' : 'Ask'}</button>
+                </div>
+                <div class="mt-3 p-4 rounded-lg bg-slate-50 border whitespace-pre-wrap min-h-[150px] text-sm">${state.answer || "Awaiting your question…"}</div>
+              </div>
+              <div class="p-4 rounded-xl bg-white shadow-sm border self-start">
+                <h3 class="font-semibold mb-2">Connect to Google AI</h3>
+                <p class="text-sm text-slate-600 mb-2">Paste your key to unlock full AI capabilities. Your key is stored only in your browser.</p>
+                <input id="apiKeyInput" type="password" placeholder="Enter your Google AI API key" value="${state.apiKey}" class="rounded-lg p-2 border w-full"/>
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="text-xs text-blue-600 hover:underline mt-2 block">Get your API key from Google AI Studio</a>
+              </div>
+            </div>`;
+        }
+
+        function createModalHTML(student) {
+            const interventions = suggestIntervention(student).map(tip => `<li>${tip}</li>`).join('');
+            return `
+            <div id="modalBackdrop" class="fixed inset-0 modal-backdrop z-40"></div>
+            <div class="fixed inset-0 flex items-center justify-center z-50 p-4">
+                <div class="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <div class="p-4 border-b flex justify-between items-center">
+                        <h2 class="text-lg font-bold flex items-center gap-2">Student Details – ${student.name} <span class="px-2 py-1 text-xs font-medium rounded-full ${colorForRisk(student.riskLevel)}">${student.riskLevel}</span></h2>
+                        <button id="closeModalBtn" class="text-2xl">&times;</button>
+                    </div>
+                    <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="p-4 rounded-xl bg-slate-50 border space-y-1"><h3 class="font-semibold text-slate-700">Summary</h3><div class="text-sm"><strong>Roll:</strong> ${student.roll}</div><div class="text-sm"><strong>Attendance:</strong> ${percent(student.attendance)}</div><div class="text-sm"><strong>Fees:</strong> ${student.feesPaid ? "Paid" : "Due"}</div><div class="text-sm"><strong>Seasonal Scores:</strong> ${student.seasonal.join(", ") || "N/A"}</div><div class="text-sm"><strong>Past Attempts:</strong> ${student.attempts}</div></div>
+                        <div class="p-4 rounded-xl bg-slate-50 border"><h3 class="font-semibold text-slate-700 mb-2">Intervention Suggestions</h3><ul class="list-disc list-inside text-sm space-y-1">${interventions}</ul></div>
+                        <div class="col-span-1 md:col-span-2 p-3 rounded-xl bg-white border"><h3 class="font-semibold text-slate-700 mb-2">Sessional Scores Trend</h3><div class="h-56"><canvas id="modalLineChart"></canvas></div></div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        // --- CHARTING FUNCTIONS ---
+        let pieChartInstance, barChartInstance, modalLineChartInstance;
+
+        function renderOrUpdateCharts() {
+            if (state.activeTab !== 'analytics' && !document.getElementById('modalLineChart')) return;
+
+            const riskCounts = state.students.reduce((c, s) => { c[s.riskLevel] = (c[s.riskLevel] || 0) + 1; return c; }, { LOW: 0, MEDIUM: 0, HIGH: 0, RED: 0 });
+            
+            // Pie Chart
+            const pieCtx = document.getElementById('pieChartCanvas')?.getContext('2d');
+            if (pieCtx) {
+                if (pieChartInstance) pieChartInstance.destroy();
+                pieChartInstance = new Chart(pieCtx, {
+                    type: 'pie',
+                    data: {
+                        labels: ['LOW', 'MEDIUM', 'HIGH', 'RED'],
+                        datasets: [{ data: [riskCounts.LOW, riskCounts.MEDIUM, riskCounts.HIGH, riskCounts.RED], backgroundColor: ['#22c55e', '#eab308', '#f97316', '#ef4444'] }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false }
+                });
+            }
+
+            // Bar Chart
+            const barCtx = document.getElementById('barChartCanvas')?.getContext('2d');
+            if (barCtx) {
+                if (barChartInstance) barChartInstance.destroy();
+                barChartInstance = new Chart(barCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: state.students.map(s => s.name.split(" ")[0]),
+                        datasets: [
+                            { label: 'Attendance (%)', data: state.students.map(s => s.attendance), backgroundColor: '#3b82f6' },
+                            { label: 'Risk Score', data: state.students.map(s => s.riskScore), backgroundColor: '#f97316' }
+                        ]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+                });
+            }
+        }
+        
+        function renderModalLineChart(student) {
+            const lineCtx = document.getElementById('modalLineChart')?.getContext('2d');
+            if(lineCtx) {
+                if(modalLineChartInstance) modalLineChartInstance.destroy();
+                modalLineChartInstance = new Chart(lineCtx, {
+                    type: 'line',
+                    data: {
+                        labels: ['Seasonal 1', 'Seasonal 2', 'Seasonal 3'],
+                        datasets: [{
+                            label: 'Score',
+                            data: student.seasonal,
+                            borderColor: '#8884d8',
+                            tension: 0.1
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 } } }
+                });
+            }
+        }
+
+        function renderHeatmap() {
+            const canvas = document.getElementById('heatmapCanvas');
+            const tooltip = document.getElementById('heatmapTooltip');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+
+            const positions = gridPositions(state.students, rect.width, rect.height);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            positions.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.r, 0, 2 * Math.PI);
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = 0.8;
+                ctx.fill();
+            });
+
+            canvas.onmousemove = (e) => {
+                const mouseX = e.offsetX;
+                const mouseY = e.offsetY;
+                let found = null;
+                for (const p of positions) {
+                    const dist = Math.sqrt((mouseX - p.x)**2 + (mouseY - p.y)**2);
+                    if (dist < p.r) {
+                        found = p;
+                        break;
+                    }
+                }
+                if (found) {
+                    tooltip.style.opacity = '1';
+                    tooltip.style.left = `${e.clientX + 10}px`;
+                    tooltip.style.top = `${e.clientY + 10}px`;
+                    tooltip.textContent = `${found.s.name} - ${found.s.riskLevel} (${percent(found.s.riskScore)})`;
+                } else {
+                    tooltip.style.opacity = '0';
+                }
+            };
+            canvas.onmouseleave = () => { tooltip.style.opacity = '0'; };
+        }
+
+        // --- EVENT HANDLERS & DOM MANIPULATION ---
+        
+        function handleLogin() {
+            if (state.loginEmail.trim()) {
+                state.user = { email: state.loginEmail };
+                state.loginEmail = '';
+                saveToLS(CONSTANTS.LS_KEY_USER, state.user);
+                render();
+            }
+        }
+        
+        function handleDemoLogin() {
+            state.user = { email: 'demo@college.edu' };
+            saveToLS(CONSTANTS.LS_KEY_USER, state.user);
+            render();
+        }
+
+        function handleLogout() {
+            state.user = null;
+            localStorage.removeItem(CONSTANTS.LS_KEY_USER);
+            render();
+        }
+        
+        async function handleFileUpload(file) {
+            if (!file) return;
+            state.isUploading = true;
+            render();
+            try {
+                const data = await file.arrayBuffer();
+                const wb = XLSX.read(data, { type: "array" });
+                const sheet = wb.Sheets[wb.SheetNames[0]];
+                const json = XLSX.utils.sheet_to_json(sheet);
+                state.students = normalizeRows(json);
+                saveToLS(CONSTANTS.LS_KEY_STUDENTS, state.students);
+            } catch (e) {
+                console.error("Failed to parse file:", e);
+                // In a real app, use a toast notification
+            } finally {
+                state.isUploading = false;
+                render();
+            }
+        }
+        
+        function handleExport() {
+            const rows = state.students.map(s => ({ Roll: s.roll, Name: s.name, Attendance: s.attendance, FeeStatus: s.feesPaid ? "Paid" : "Due", Seasonal1: s.seasonal[0] || 0, Seasonal2: s.seasonal[1] || 0, Seasonal3: s.seasonal[2] || 0, Attempts: s.attempts, RiskScore: s.riskScore, RiskLevel: s.riskLevel }));
+            const ws = XLSX.utils.json_to_sheet(rows);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Students");
+            XLSX.writeFile(wb, "educare_export.xlsx");
+        }
+
+        async function handleAskMentor() {
+            if (!state.question.trim()) return;
+            state.isAnswering = true;
+            state.answer = '🧠 Thinking...';
+            render();
+            const text = await geminiMentorChatReply(state.question, state.students, state.apiKey);
+            state.answer = text;
+            state.isAnswering = false;
+            render();
+        }
+
+        function handleTabClick(tab) {
+            state.activeTab = tab;
+            render();
+        }
+        
+        function handleShowModal(roll) {
+            const student = state.students.find(s => s.roll === roll);
+            if(student) {
+                document.getElementById('modal-container').innerHTML = createModalHTML(student);
+                document.getElementById('closeModalBtn').addEventListener('click', handleCloseModal);
+                document.getElementById('modalBackdrop').addEventListener('click', handleCloseModal);
+                renderModalLineChart(student);
+            }
+        }
+
+        function handleCloseModal() {
+            document.getElementById('modal-container').innerHTML = '';
+        }
+
+        function addEventListeners() {
+            if (!state.user) {
+                document.getElementById('loginBtn').addEventListener('click', handleLogin);
+                document.getElementById('demoLoginBtn').addEventListener('click', handleDemoLogin);
+                document.getElementById('loginEmail').addEventListener('input', e => { state.loginEmail = e.target.value; });
+                document.getElementById('loginEmail').addEventListener('keydown', e => e.key === 'Enter' && handleLogin());
+            } else {
+                document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+                document.getElementById('uploadBtn').addEventListener('click', () => document.getElementById('fileInput').click());
+                document.getElementById('fileInput').addEventListener('change', e => handleFileUpload(e.target.files[0]));
+                document.getElementById('exportBtn').addEventListener('click', handleExport);
+                document.getElementById('filterInput').addEventListener('input', e => { state.filter = e.target.value; render(); });
+                
+                document.querySelectorAll('.tab-trigger').forEach(btn => {
+                    btn.addEventListener('click', () => handleTabClick(btn.dataset.tab));
+                });
+
+                if (state.activeTab === 'mentor') {
+                    document.getElementById('askMentorBtn').addEventListener('click', handleAskMentor);
+                    document.getElementById('mentorQuestion').addEventListener('input', e => { state.question = e.target.value; });
+                    document.getElementById('mentorQuestion').addEventListener('keydown', e => e.key === 'Enter' && handleAskMentor());
+                    document.getElementById('apiKeyInput').addEventListener('input', e => { state.apiKey = e.target.value; saveToLS(CONSTANTS.LS_KEY_API_KEY, state.apiKey); });
+                }
+            }
+        }
+
+        // --- RENDER & INITIALIZATION ---
+        function render() {
+            const root = document.getElementById('app-root');
+            if (!state.user) {
+                root.innerHTML = createLoginHTML();
+            } else {
+                root.innerHTML = createAppShellHTML();
+                document.getElementById('tabs-content').innerHTML = createTabsContentHTML();
+                document.querySelector(`.tab-trigger[data-tab="${state.activeTab}"]`).setAttribute('data-state', 'active');
+                renderOrUpdateCharts();
+                if (state.activeTab === 'students') {
+                    // Timeout to ensure canvas is in DOM before drawing
+                    setTimeout(renderHeatmap, 0);
+                }
+            }
+            addEventListeners();
+        }
+
+        function initializeApp() {
+            // Load initial state from local storage
+            state.user = loadFromLS(CONSTANTS.LS_KEY_USER, "null");
+            state.students = loadFromLS(CONSTANTS.LS_KEY_STUDENTS, "[]");
+            state.apiKey = loadFromLS(CONSTANTS.LS_KEY_API_KEY, '""');
+
+            // Set up demo data if first load
+            if (state.students.length === 0) {
+                state.students = normalizeRows([
+                    { Roll: 1, Name: "Aarav Sharma", Attendance: 82, Seasonal1: 76, Seasonal2: 68, Seasonal3: 62, FeeStatus: "Paid" },
+                    { Roll: 2, Name: "Ananya Gupta", Attendance: 48, Seasonal1: 58, Seasonal2: 52, Seasonal3: 49, Attempts: 3, FeeStatus: "Due" },
+                    { Roll: 3, Name: "Rohan Verma", Attendance: 66, Seasonal1: 80, Seasonal2: 72, Seasonal3: 60, Attempts: 2, FeeStatus: "Paid" },
+                    { Roll: 4, Name: "Isha Patel", Attendance: 91, Seasonal1: 88, Seasonal2: 90, Seasonal3: 92, FeeStatus: "Paid" },
+                ]);
+                saveToLS(CONSTANTS.LS_KEY_STUDENTS, state.students);
+            }
+            render();
+        }
+
+        // Expose handleShowModal globally for onclick
+        window.handleShowModal = handleShowModal;
+        
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+</html>
